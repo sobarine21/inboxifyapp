@@ -1,59 +1,60 @@
-import subprocess
-from fastapi import FastAPI
-from pydantic import BaseModel
+import streamlit as st
 from email_validator import validate_email, EmailNotValidError
 import dns.resolver
 import smtplib
-import streamlit as st
-import threading
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 
-# FastAPI App
-app = FastAPI()
+# Function to validate email
+def validate_email_address(email, blacklist, custom_sender="test@example.com"):
+    """Enhanced email validation with DNS, SMTP, and blacklist checks."""
+    # (Keep the original validation function here)
+    pass
 
-class EmailRequest(BaseModel):
-    email: str
-    blacklist: list
+# Streamlit app with API-like behavior
+st.title("Inboxify Backend")
 
-@app.post("/validate_email")
-def validate_email_address(request: EmailRequest):
-    email = request.email
-    blacklist = request.blacklist
+# Read query parameters
+query_params = st.experimental_get_query_params()
 
-    try:
-        validate_email(email)
-    except EmailNotValidError as e:
-        return {"email": email, "status": "Invalid", "message": str(e)}
+# Check if it's an API request
+if "api" in query_params:
+    st.write("This is the API backend for Inboxify.")
 
-    # Add DNS and SMTP checks here...
-    return {"email": email, "status": "Valid", "message": "Email is valid"}
+    # Check for required inputs in query parameters
+    blacklist = query_params.get("blacklist", [])
+    email = query_params.get("email", [])
 
-# Streamlit App
-def run_streamlit():
-    # Streamlit app logic
-    st.title("Email Validator - Streamlit")
-    email = st.text_input("Enter your email:")
-    blacklist = st.text_area("Enter blacklist domains (comma-separated):")
+    if not email:
+        st.json({"error": "Email parameter is required."})
+    else:
+        email = email[0]  # Extract the first email from the query params
+        blacklist = set(blacklist)
 
-    if st.button("Validate"):
-        import requests
+        # Validate email
+        result = validate_email_address(email, blacklist)
+        st.json({"email": result[0], "status": result[1], "message": result[2]})
 
-        # Call FastAPI
-        response = requests.post(
-            "http://127.0.0.1:8000/validate_email",
-            json={"email": email, "blacklist": blacklist.split(",")},
-        )
+# Regular Streamlit functionality for frontend
+uploaded_file = st.file_uploader("Upload a .txt file with emails", type=["txt"])
+if uploaded_file:
+    emails = uploaded_file.read().decode("utf-8").splitlines()
+    st.write(f"Processing {len(emails)} emails...")
 
-        if response.status_code == 200:
-            result = response.json()
-            st.write(f"Status: {result['status']}")
-            st.write(f"Message: {result['message']}")
-        else:
-            st.write("Error in API response")
+    # Process emails
+    results = []
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [
+            executor.submit(validate_email_address, email.strip(), set())
+            for email in emails if email.strip()
+        ]
+        for future in futures:
+            results.append(future.result())
 
-# Run FastAPI and Streamlit concurrently
-def run_both():
-    threading.Thread(target=lambda: subprocess.run(["uvicorn", "main:app", "--reload"])).start()
-    run_streamlit()
+    # Display results
+    df = pd.DataFrame(results, columns=["Email", "Status", "Message"])
+    st.dataframe(df)
 
-if __name__ == "__main__":
-    run_both()
+    # Export results
+    csv = df.to_csv(index=False)
+    st.download_button("Download Results", data=csv, file_name="email_validation_results.csv", mime="text/csv")
